@@ -88,7 +88,7 @@ function Send-Log {
     [string] $smtpServer = 'smtp.mail.scl3.mozilla.com'
   )
   if (Test-Path $logfile) {
-    Send-MailMessage -To $to -Subject $subject -Body ([IO.File]::ReadAllText($logfile)) -SmtpServer $smtpServer -From $from
+    Send-MailMessage -To arich@mozilla.com -Subject $subject -Body ([IO.File]::ReadAllText($logfile)) -SmtpServer $smtpServer -From $from
   } else {
     Write-Log -message ("{0} :: skipping log mail, file: {1} not found" -f $($MyInvocation.MyCommand.Name), $logfile) -severity 'WARN'
   }
@@ -222,8 +222,10 @@ function Has-PuppetRunSuccessfully {
     [string] $puppetLog
   )
   if ((Test-Path $puppetLog) -and (Does-FileContain -haystack $puppetLog -needle "Puppet \(notice\): Finished catalog run")) {
+    Write-Log -message ('function Has-PuppetRunSuccessfully - puppet has run successfully') -severity 'DEBUG'
     return $true
   } else {
+    Write-Log -message ('function Has-PuppetRunSuccessfully - puppet has not run successfully') -severity 'DEBUG'
     return $false
   }
 }
@@ -274,6 +276,7 @@ function Disable-PuppetService {
     Write-Log -message 'deleting RunPuppet scheduled task' -severity 'INFO'
     $schtasksArgs = @('/delete', '/tn', 'RunPuppet', '/f')
     & 'schtasks' $schtasksArgs
+    Write-Log -message ('function Disable-PuppetService: disabling puppet service') -severity 'DEBUG'
   }
 }
 function New-CertsExist {
@@ -287,6 +290,7 @@ function New-CertsExist {
       ('{0}\certs\{1}.{2}.pem' -f $sslPath, $hostname, $domain),
       ('{0}\private_keys\{1}.{2}.pem' -f $sslPath, $hostname, $domain)
     )
+    Write-Log -message ('function New-CertsExist - hostname {0} derived from env:COMPUTERNAME, domain {1} derived from env:USERDOMAIN, sslPath {2} path derived from env:ProgramData' -f $hostname, $domain, $sslPath) -severity 'DEBUG'
   )
   return (-not (@($certs | % { ((Test-Path -Path $_ -ErrorAction SilentlyContinue) -and ((Get-Item $_).LastWriteTime -gt ((Get-Date) - (New-Timespan -Minutes $ageInMinutes)))) }) -contains $false))
 }
@@ -513,7 +517,11 @@ function Is-HostnameSetCorrectly {
   param (
     [string] $hostnameExpected
   )
+  Write-Log -message ('function Is-HostnameSetCorrectly - hostnameExpected: {0}' -f $hostnameExpected) -severity 'DEBUG'
   $netDnsHostname = [System.Net.Dns]::GetHostName()
+  Write-Log -message ('function Is-HostnameSetCorrectly - netDnsHostname: {0}' -f $netDnsHostname) -severity 'DEBUG'
+  Write-Log -message ('function Is-HostnameSetCorrectly - env:COMPUTERNAME: {0}' -f $env:COMPUTERNAME) -severity 'DEBUG'
+
   if (("$hostnameExpected" -ieq "$netDnsHostname") -and (("$hostnameExpected" -ieq "$env:COMPUTERNAME") -or (('{0}EN' -f $env:COMPUTERNAME) -ieq $hostnameExpected))) {
     return $true
   } else {
@@ -537,6 +545,8 @@ function Set-Hostname {
   param (
     [string] $hostname
   )
+  Write-Log -message ('function Set-Hostname - env:COMPUTERNAME {0} before explicit assignment' -f $env:COMPUTERNAME) -severity 'DEBUG'
+ 
   [Environment]::SetEnvironmentVariable("COMPUTERNAME", "$hostname", "Machine")
   $env:COMPUTERNAME = $hostname
   (Get-WmiObject Win32_ComputerSystem).Rename("$hostname")
@@ -575,14 +585,21 @@ function Is-DomainSetCorrectly {
   param (
     [string] $domainExpected
   )
+  Write-Log -message ('function Is-DomainSetCorrectly - domainExpected is {0}' -f $domainExpected) -severity 'DEBUG'
+  Write-Log -message ('function Is-DomainSetCorrectly - env:USERDOMAIN is {0}' -f $env:USERDOMAIN) -severity 'DEBUG'
+
   if (Test-Path "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\NV Domain") {
     $primaryDnsSuffix = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\" -Name "NV Domain")."NV Domain"
+    Write-Log -message ('function Is-DomainSetCorrectly - test path HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\NV Domain set primaryDnsSuffix to {0}' -f $primaryDnsSuffix) -severity 'DEBUG'
   } elseif (Test-Path "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Domain") {
     $primaryDnsSuffix = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\" -Name "Domain")."Domain"
+    Write-Log -message ('function Is-DomainSetCorrectly - test path HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Domain set primaryDnsSuffix to {0}' -f $primaryDnsS  uffix) -severity 'DEBUG'
   } else {
     $primaryDnsSuffix = $env:USERDOMAIN
+    Write-Log -message ('function Is-DomainSetCorrectly - setting primaryDnsSuffix from env:USERDOMAIN {0}' -f $primaryDnsSuffix) -severity 'DEBUG'
   }
   if ("$domainExpected" -ieq "$primaryDnsSuffix") {
+    Write-Log -message ('domainExpected == primaryDnsSuffix') -severity 'DEBUG'
     return $true
   } else {
     Write-Log -message ('(nv) domain registry key: {0}, expected: {1}' -f $primaryDnsSuffix, $domainExpected) -severity 'DEBUG'
@@ -600,6 +617,7 @@ function Set-Domain {
   param (
     [string] $domain
   )
+  Write-Log -message ('function Set-Domain - env:USERDOMAIN is {0} before explicit assignment' -f $env:USERDOMAIN) -severity 'DEBUG'
   [Environment]::SetEnvironmentVariable("USERDOMAIN", "$domain", "Machine")
   $env:USERDOMAIN = $domain
   Set-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\' -Name 'Domain' -Value "$domain"
@@ -620,8 +638,10 @@ function Is-AggregatorConfiguredCorrectly {
   )
   $conf = ('{0}\nxlog\conf\nxlog_target_aggregator.conf' -f @{$true=${env:ProgramFiles(x86)};$false=$env:ProgramFiles}[(Test-Path Env:\'ProgramFiles(x86)')])
   if ((Test-Path $conf) -and (Does-FileContain -haystack $conf -needle $aggregator)) {
+    Write-Log -message ('function Is-AggregatorConfiguredCorrectly - set correctly') -severity 'DEBUG'
     return $true
   } else {
+    Write-Log -message ('function Is-AggregatorConfiguredCorrectly - set incorrectly') -severity 'DEBUG'
     return $false
   }
 }
@@ -1593,6 +1613,9 @@ function Enable-BuildBot {
     [string] $username = 'cltbld',
     [string] $target = ('{0}\Users\{1}\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\start-buildbot.bat' -f $env:SystemDrive, $username)
   )
+  begin {
+    Write-Log -message ('{0} :: Function started' -f $($MyInvocation.MyCommand.Name)) -severity 'DEBUG'
+  }
   process {
     try {
       if (Test-Path $target) {
@@ -1654,6 +1677,9 @@ function Install-BasePrerequisites {
     [string] $aggregator = 'log-aggregator.srv.releng.use1.mozilla.com',
     [string] $domain = 'releng.use1.mozilla.com'
   )
+  begin {
+    Write-Log -message ("{0} :: Function started" -f $($MyInvocation.MyCommand.Name)) -severity 'DEBUG'
+  }
   Install-RelOpsPrerequisites -aggregator $aggregator
   Enable-CloneBundle
   #Install-MozillaBuildAndPrerequisites
